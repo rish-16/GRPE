@@ -1,4 +1,5 @@
 import os
+import time
 import sys
 import json
 import torch
@@ -111,7 +112,6 @@ def evaluate(model, test_dataset, config, device=None):
     else:
         result = evaluator.eval({"y_true": y_true, "y_pred": y_pred})
     return result
-
 
 def is_left_better(left, right, metric="mae"):
     if left is None:
@@ -365,10 +365,16 @@ def train_process(rank, args):
         if args.early_stop_epoch is None
         else min(args.max_epoch, args.early_stop_epoch)
     )
+
+    ALLTIMES = []
+    ACCURACIES = []
+
     for epoch in range(1, end_epoch + 1):
         if args.distributed:
             train_loader.sampler.set_epoch(epoch)
 
+        start = time.time()
+        
         # In order to load dataset in memory after DataLoader workers are spawned
         train_loader.dataset.delete_data()
         loss = train(
@@ -381,15 +387,17 @@ def train_process(rank, args):
             grad_norm=args.grad_norm,
         )
 
+        end = time.time()
+        diff = end - start
+        ALLTIMES.append(diff)
+
         if (
             (epoch > args.valid_after)
             or (epoch % args.valid_every) == 0
             or (epoch == 1)
         ):
             valid_loader.dataset.delete_data()
-            val_perf = evaluate(model, valid_loader, config, device=device)[
-                config.metric
-            ]
+            val_perf = evaluate(model, valid_loader, config, device=device)[config.metric]
             perfs["val"][epoch] = val_perf
 
             if is_left_better(val_perf, best_val_perf, metric=config.metric):
@@ -415,6 +423,8 @@ def train_process(rank, args):
         # save all performance records
         torch.save(perfs, f"{args.save}/perfs.pt")
 
+    np.save("grpe_std_epoch_timings.npy", np.asarray(ALLTIMES))
+    # np.save("grpe_std_accuracies.npy", np.asarray(ACCURACIES))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
